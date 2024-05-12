@@ -241,7 +241,7 @@ from airflow.utils.task_group import TaskGroup
 
 
 with DAG(
-    'tutorial',
+    'group_dag',
     schedule_interval=None,
     start_date=datetime(2024,5,11),
 ) as dag:
@@ -257,3 +257,97 @@ with DAG(
     end_task = EmptyOperator(task_id = 'end_task')
     
     start_task >> tg1 >> end_task
+    
+
+
+
+# topic: 假設拿到一筆 json 格式的訂單資料，要利用訂單金額和訂單數量計算出平均的訂單金額
+# 傳統寫法, 透過xcom傳遞
+def extract(ti): #用json模組讀取資料, 三個單引號 或 三個雙引號 可表示多行註解 或 可以當多行字串使用
+    json_string = """
+        [
+            {
+                "order_id": "1001",
+                "order_item": "薯餅蛋餅",
+                "order_price": 45
+            },
+            {
+                "order_id": "1002",
+                "order_item": "大冰奶",
+                "order_price": 35
+            }
+        ]
+    """
+    order_data = json.loads(json_string)
+    ti.xcom_push(key = 'order_data', value = order_data)
+    print("order_data", order_data)
+    
+# 計算各品項的總金額
+def transform_sum(ti):
+    order_total = 0
+    for order_dict in ti.xcom_pull(task_ids = 'extract', key = 'order_data'):
+        order_total += order_dict['order_price']
+    ti.xcom_push(key = 'order_total', value = order_total)
+    print("order_total", order_total)
+    
+# 計算有多少個品項
+def transfrom_count(ti):
+    order_count = 0
+    order_list = ti.xcom_pull(task_ids = 'extract', key = 'order_data')
+    order_count += len(order_list)
+    ti.xcom_push(key = 'order_count', value = order_count)
+    print("order_count", order_count)
+    
+# 計單平均金額
+def tansform_average(ti):
+    order_average = 0
+    
+    #因為task: sum, count 都是包在group裡面, 所以task_ids前面還要先加group的id
+    order_total = ti.xcom_pull(task_ids = 'transform.sum', key = 'order_total')
+    order_count = ti.xcom_pull(task_ids = 'transform.count', key = 'order_count')
+    print("oerder_total", order_total)
+    print("order_count", order_count)
+    order_average = order_total/order_count #除號左右兩邊不能有空格
+    ti.xcom_push(key = 'order_average', value = order_average)
+    print("order_average", order_average)
+
+# 印出平均金額
+def load(ti):
+    order_average = ti.xcom_pull(task_ids = 'transform.average', key = 'order_average')
+    print("平均金額: ", order_average)
+
+with DAG(
+    dag_id = 'traditional_etl_dag',
+    schedule_interval = None,
+    start_date = datetime(2024, 5, 12),
+) as dag:
+    extract = PythonOperator(
+        task_id = 'extract',
+        python_callable=extract
+    )
+    
+    #sum, count, average 包成一個group
+    with TaskGroup(group_id = 'transform') as transform:
+        sum = PythonOperator(
+            task_id = 'sum',
+            python_callable=  transform_sum
+        )
+        
+        count = PythonOperator(
+            task_id = 'count',
+            python_callable = transfrom_count
+        )
+        
+        average = PythonOperator(
+            task_id = 'average',
+            python_callable = tansform_average
+        )
+        # 記得定義group的順序, 中括號表示sum跟count可以同時做, 且兩者都做完才能做average
+        [sum, count] >> average
+        
+    load = PythonOperator(
+        task_id = 'load',
+        python_callable = load
+    )
+    
+    extract >> transform >> load
