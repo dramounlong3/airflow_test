@@ -39,7 +39,7 @@
 #     check_weekday = BranchPythonOperator(
 #         task_id = 'check_weekday',
 #         python_callable = check_weekday,
-#         op_args=['{{ ds_nodash }}']
+#         op_args=['{{ ds_nodash }}'] #ds_nodash是執行日的日期, 20240511, 作為呼叫check_weekday時代過去的參數 => check_weekday(ds_nodash)
 #     )
 
 #     is_workday = DummyOperator(
@@ -78,7 +78,7 @@ from airflow.operators.bash import BashOperator
 # bash operator
 
 with DAG(
-    dag_id ='config_module',
+    dag_id ='simple_dag',
     start_date = datetime(2024, 5, 11),
     schedule_interval = '@daily'
 ) as dag: 
@@ -299,7 +299,7 @@ def transfrom_count(ti):
     print("order_count", order_count)
     
 # 計單平均金額
-def tansform_average(ti):
+def transform_average(ti):
     order_average = 0
     
     #因為task: sum, count 都是包在group裡面, 所以task_ids前面還要先加group的id
@@ -340,7 +340,7 @@ with DAG(
         
         average = PythonOperator(
             task_id = 'average',
-            python_callable = tansform_average
+            python_callable = transform_average
         )
         # 記得定義group的順序, 中括號表示sum跟count可以同時做, 且兩者都做完才能做average
         [sum, count] >> average
@@ -351,3 +351,237 @@ with DAG(
     )
     
     extract >> transform >> load
+    
+    
+# topic: 假設拿到一筆 json 格式的訂單資料，要利用訂單金額和訂單數量計算出平均的訂單金額
+# 使用新方式, decorators
+# @dag              => 取代 with DAG()
+# @task             => 取代 PythonOperator
+# @task_group       => 取代 with TaskGroup()
+# @task.virtualenv  => python虛擬環境
+# @task.docker      => docker環境
+
+from airflow.decorators import dag, task, task_group
+
+@dag( #沒設定dag_id, 預設會以function name為id
+    schedule_interval = None,
+    start_date = datetime(2024, 5, 12)
+)
+def taskflow_etl_dag():
+    @task() #沒設定task_id, 預設會以function name為id
+    def extract(): #用json模組讀取資料, 三個單引號 或 三個雙引號 可表示多行註解 或 可以當多行字串使用
+        json_string = """
+            [
+                {
+                    "order_id": "1001",
+                    "order_item": "薯餅蛋餅",
+                    "order_price": 45
+                },
+                {
+                    "order_id": "1002",
+                    "order_item": "大冰奶",
+                    "order_price": 35
+                }
+            ]
+        """
+        order_data = json.loads(json_string)
+        print("order_data", order_data)
+        return order_data
+    
+    @task_group()
+    def transform(q): #因為transform被呼叫的時候 代的參數就是extract(), 而extract會回傳order_data
+        @task()
+        # 計算各品項的總金額
+        def transform_sum(four_json): #因為tansform_sum被呼叫的時候, 就是由transform()帶入兩個參數, 所以這裡的參數名可以隨便命名
+            order_total = 0
+            for order_dict in four_json:
+                order_total += order_dict['order_price']
+                
+            print("order_total", order_total)
+            return order_total
+
+        @task()
+        # 計算有多少個品項
+        def transfrom_count(four_json):
+            order_count = len(four_json)
+            print("order_count", order_count)
+            return order_count
+
+        @task()
+        # 計單平均金額
+        def transform_average(x, y):
+            order_average = x/y #除號左右兩邊不能有空格
+            print("order_average", order_average)
+            return order_average
+        
+                             # transform_average(x, y)
+                             # q 就是 extract 回傳回來的order_data
+        order_average_result = transform_average(transform_sum(q), transfrom_count(q))
+        return order_average_result
+    
+    @task()
+    def load(order_average):
+        print(f'平均金額:  {order_average}')
+    
+    # load(q)
+    load(transform(extract()))
+    
+taskflow_etl_dag()
+
+
+
+
+import os
+import time
+import logging
+from datetime import datetime, timedelta
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.operators.empty import EmptyOperator
+# from airflow.operators.branch_operator import BranchPythonOperator
+from airflow.operators.python_operator import BranchPythonOperator
+
+def scan_file():
+    # \\deltafileserver\tableaureport\Data Alert\<Project>\Setting
+    # 0.檢查專案資料夾內是否有excel
+    # 0-1.true or false in list
+    print("scan_file")
+    return 'download_file'
+    # pass
+
+class File_management:
+    def download_file():
+        # 1.根據scanner的結果, 有檔案就download
+        # 1-1.download file
+        # 1-2. sys_log.download_success / sys_log.download_fail
+        # 1-3. db.download_success / db.download_fail
+        print("File_management.download_file")
+        pass
+
+    def read_file():
+        # 2.讀取excel
+        # 2-1. read file
+        # 2-2. sys_log.read_success / sys_log.read_fail
+        # 2-3. db.read_success / db.read_fail
+        print("File_management.read_file")
+        pass
+
+    def backup_file():
+        # 5.備份excel
+        # 5-1. copy excel to Backup folder
+        # 5-2. sys_log.backup_success / sys_log.backup_fail
+        # 5-3. db.backup_success / db.backup_fail
+        print("File_management.backup_file")
+        pass
+
+    def remove_file():
+        # 6.刪除original excel
+        # 6-1. remove file
+        # 6-2. sys_log.remove_success / sys_log.remove_fail
+        # 6-3. db.remove_success / db.remove_fail
+        print("File_management.remove_file")
+        pass
+    
+class Notification:
+    def send_mail():
+        # 4.根據3-1 ~ 3-3的結果決定是否通知
+        # 4-1. if field failed => notify_[owner]_user
+        # 4-2. sys_log.notify_owner_user_success / sys_log.notify_owner_user_fail
+        # 4-3. db.notify_owner_user_success / db.notify_owner_user_fail
+
+        # 4-4. if rule expression FALSE/TRUE => notify_[mail_to]_user #條件是否達標都通知
+        # 4-2. sys_log.notify_[mail_to]_user_success / sys_log.notify_[mail_to]_user_fail
+        # 4-3. db.notify_[mail_to]_user_success / db.notify_[mail_to]_user_fail
+        print("Notification.send_mail")
+        pass
+
+class Validation:
+    def __init__(self) -> None:
+        self.notify = Notification()
+    
+    def validation_field():
+        # 3.驗證欄位正確性及rule是否達標
+        # 3-1. verify rls field
+        # 3-2. sys_log.verify_field_success / sys_log.verify_field_fail
+        # 3-3. db.verify_field_success / db.verify_field_fail
+        print("Validation.validation_field")
+        pass
+
+    def validation_rule():
+        # 3-4. verify rule expression
+        # 3-2. alert_log.verify_rule_success / alert_log.verify_rule_fail
+        # 3-3. db.verify_rule_success / db.verify_rule_fail
+        print("Validation.validation_rule")
+        pass
+
+
+
+def database_conn():
+    # other
+    # return a db connection
+    print("db connection")
+    pass
+
+
+
+with DAG(
+    dag_id = 'Config_Module',
+    schedule_interval = None,
+    start_date = datetime(2024,5,11),
+    catchup = False,
+    tags = ['DataAlert']
+) as dag:
+    # scan_file = PythonOperator(
+    #     task_id = 'scan_file',
+    #     python_callable = scan_file
+    # )
+    
+    scan_file = BranchPythonOperator(
+        task_id = 'scan_file',
+        python_callable = scan_file,
+    )
+
+    download_file = PythonOperator(
+        task_id = 'download_file',
+        python_callable = File_management.download_file
+    )
+
+    read_file = PythonOperator(
+        task_id = 'read_file',
+        python_callable = File_management.read_file
+    )
+
+    backup_file = PythonOperator(
+        task_id = 'backup_file',
+        python_callable = File_management.backup_file
+    )
+
+    remove_file = PythonOperator(
+        task_id = 'remove_file',
+        python_callable = File_management.remove_file
+    )
+
+    validation_field = PythonOperator(
+        task_id = 'validation_field',
+        python_callable = Validation.validation_field
+    )
+
+    validation_rule = PythonOperator(
+        task_id = 'validation_rule',
+        python_callable = Validation.validation_rule
+    )
+
+    # send_mail = PythonOperator(
+    #     task_id = 'send_mail',
+    #     python_callable = Notification.send_mail
+    # )
+
+    end_task = BashOperator(
+        task_id = 'end_task',
+        bash_command = "echo the end!!!"
+        
+    )
+
+    scan_file >> [download_file, end_task]
+    download_file >> read_file >> validation_field >> [validation_rule, end_task]
+    validation_rule >> backup_file >> remove_file >> end_task
