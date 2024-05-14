@@ -432,21 +432,65 @@ taskflow_etl_dag()
 
 
 import os
+import glob
 import time
-import logging
+import loguru
+import pymssql
+import pandas as pd
+# from common.db_tools import get_conn_info
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.operators.empty import EmptyOperator
-# from airflow.operators.branch_operator import BranchPythonOperator
+from airflow.operators.dummy import DummyOperator
 from airflow.operators.python_operator import BranchPythonOperator
+
+
+def database_conn():
+    # other
+    # return a db connection
+
+    # conn_args = get_conn_info("GLOBAL_MSSQLDB_DATA_ALERT")
+    try:
+        # conn = pymssql.connect(**conn_args)
+        conn = pymssql.connect(host = "localhost", user = "sa", password = "19890729", database = "testdb")
+    except Exception as e:
+        print("error1", str(e))
+    cursor = conn.cursor()
+    return (conn, cursor)
+
 
 def scan_file():
     # \\deltafileserver\tableaureport\Data Alert\<Project>\Setting
     # 0.檢查專案資料夾內是否有excel
     # 0-1.true or false in list
-    print("scan_file")
-    return 'download_file'
+    scan_folder = r'\\deltafileserver\tableaureport\Data Alert'
+    conn, cur = None, None
+
+    try:
+        conn, cur = database_conn()
+        # sql_query = '''
+        #     SELECT * FROM BI_Data_Alert.dbo.Project
+        # '''
+        
+        sql_query = '''
+            SELECT * FROM testdb.dbo.Project
+        '''
+
+        cur.execute(sql_query)
+        columns = [column[0] for column in cur.description]
+        data = cur.fetchall()
+
+        df = pd.DataFrame(data, columns = columns)
+
+        print("\ndf\n", df)
+    except Exception as e:
+
+        print("error2", str(e))
+    finally:
+        print("finally")
+        if cur is not None: cur.close()
+        if conn is not None: conn.close()
+    return 'end_task'
     # pass
 
 class File_management:
@@ -514,16 +558,6 @@ class Validation:
         print("Validation.validation_rule")
         pass
 
-
-
-def database_conn():
-    # other
-    # return a db connection
-    print("db connection")
-    pass
-
-
-
 with DAG(
     dag_id = 'Config_Module',
     schedule_interval = None,
@@ -576,10 +610,8 @@ with DAG(
     #     python_callable = Notification.send_mail
     # )
 
-    end_task = BashOperator(
-        task_id = 'end_task',
-        bash_command = "echo the end!!!"
-        
+    end_task = DummyOperator(
+        task_id = 'end_task'
     )
 
     scan_file >> [download_file, end_task]
