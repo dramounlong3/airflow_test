@@ -431,144 +431,93 @@ taskflow_etl_dag()
 
 
 
-import os
-import glob
-import time
-import loguru
-import pymssql
-import pandas as pd
-# from common.db_tools import get_conn_info
-from datetime import datetime, timedelta
+
+from event_log import Event_log
+from db_access import database_conn
+from file_management import File_management
+from validation import Validation
+from datetime import datetime
+
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.operators.dummy import DummyOperator
 from airflow.operators.python_operator import BranchPythonOperator
 
-
-def database_conn():
-    # other
-    # return a db connection
-
-    # conn_args = get_conn_info("GLOBAL_MSSQLDB_DATA_ALERT")
-    try:
-        # conn = pymssql.connect(**conn_args)
-        conn = pymssql.connect(host = "localhost", user = "sa", password = "19890729", database = "testdb")
-    except Exception as e:
-        print("error1", str(e))
-    cursor = conn.cursor()
-    return (conn, cursor)
+import os
+import pandas as pd
 
 
-def scan_file():
+def scan_file(ti):
+    
     # \\deltafileserver\tableaureport\Data Alert\<Project>\Setting
     # 0.檢查專案資料夾內是否有excel
-    # 0-1.true or false in list
-    scan_folder = r'\\deltafileserver\tableaureport\Data Alert'
+    # 0-1.project_name, project_path, is_exist in a list
+    Event_log.log_message('trace', 'Start to scan project folder on project folders.')
+    
+    # scan_folder = r'D:\deltafileserver\tableaureport\Data Alert'  #home windows
+    # scan_folder = r'\\deltafileserver\tableaureport\Data Alert'     #company
+    scan_folder = r'/opt/airflow/deltafileserver/tableaureport/Data Alert' #home linux
+    
     conn, cur = None, None
+    project_folder_list = []
 
     try:
         conn, cur = database_conn()
-        # sql_query = '''
-        #     SELECT * FROM BI_Data_Alert.dbo.Project
-        # '''
-        
+
         sql_query = '''
-            SELECT * FROM testdb.dbo.Project
+            SELECT Project_Name FROM BI_Data_Alert.dbo.Project
         '''
 
         cur.execute(sql_query)
         columns = [column[0] for column in cur.description]
         data = cur.fetchall()
+        Event_log.log_message('trace', 'End of the query dbo.Project.')
 
         df = pd.DataFrame(data, columns = columns)
+        
+        setting_folder = 'Setting'
+        original_file_name = 'Alert & Rule Setting.xlsx'
+        
+        # DB project 和 cloud storage都存在的才會被檢查
+        for project_name in df['Project_Name']:
+            project_path = os.path.join(scan_folder, project_name, setting_folder, original_file_name)
+            project_setting_file_is_exists = os.path.exists(project_path)
+            project_folder = {
+                "project_name": project_name,
+                "project_path": project_path,
+                "project_setting_file_is_exists": project_setting_file_is_exists
+            }
+            project_folder_list.append(project_folder)
 
-        print("\ndf\n", df)
+        Event_log.log_message('success', 'Successfully scan colud storage.')
+        if len(project_folder_list) == 0:
+            Event_log.log_message('warning', 'There have been no updates to the project folders.')
+            
     except Exception as e:
-
-        print("error2", str(e))
+        Event_log.log_message('error', f'{str(e)}')
     finally:
-        print("finally")
         if cur is not None: cur.close()
         if conn is not None: conn.close()
-    return 'end_task'
-    # pass
 
-class File_management:
-    def download_file():
-        # 1.根據scanner的結果, 有檔案就download
-        # 1-1.download file
-        # 1-2. sys_log.download_success / sys_log.download_fail
-        # 1-3. db.download_success / db.download_fail
-        print("File_management.download_file")
-        pass
+    if any(item['project_setting_file_is_exists'] for item in project_folder_list):
+        ti.xcom_push(key = 'project_folder_list', value = project_folder_list)
+        return "download_file"
+        # return 'read_file'
+    else:
+        return 'end_task'
 
-    def read_file():
-        # 2.讀取excel
-        # 2-1. read file
-        # 2-2. sys_log.read_success / sys_log.read_fail
-        # 2-3. db.read_success / db.read_fail
-        print("File_management.read_file")
-        pass
-
-    def backup_file():
-        # 5.備份excel
-        # 5-1. copy excel to Backup folder
-        # 5-2. sys_log.backup_success / sys_log.backup_fail
-        # 5-3. db.backup_success / db.backup_fail
-        print("File_management.backup_file")
-        pass
-
-    def remove_file():
-        # 6.刪除original excel
-        # 6-1. remove file
-        # 6-2. sys_log.remove_success / sys_log.remove_fail
-        # 6-3. db.remove_success / db.remove_fail
-        print("File_management.remove_file")
-        pass
-    
-class Notification:
-    def send_mail():
-        # 4.根據3-1 ~ 3-3的結果決定是否通知
-        # 4-1. if field failed => notify_[owner]_user
-        # 4-2. sys_log.notify_owner_user_success / sys_log.notify_owner_user_fail
-        # 4-3. db.notify_owner_user_success / db.notify_owner_user_fail
-
-        # 4-4. if rule expression FALSE/TRUE => notify_[mail_to]_user #條件是否達標都通知
-        # 4-2. sys_log.notify_[mail_to]_user_success / sys_log.notify_[mail_to]_user_fail
-        # 4-3. db.notify_[mail_to]_user_success / db.notify_[mail_to]_user_fail
-        print("Notification.send_mail")
-        pass
-
-class Validation:
-    def __init__(self) -> None:
-        self.notify = Notification()
-    
-    def validation_field():
-        # 3.驗證欄位正確性及rule是否達標
-        # 3-1. verify rls field
-        # 3-2. sys_log.verify_field_success / sys_log.verify_field_fail
-        # 3-3. db.verify_field_success / db.verify_field_fail
-        print("Validation.validation_field")
-        pass
-
-    def validation_rule():
-        # 3-4. verify rule expression
-        # 3-2. alert_log.verify_rule_success / alert_log.verify_rule_fail
-        # 3-3. db.verify_rule_success / db.verify_rule_fail
-        print("Validation.validation_rule")
-        pass
 
 with DAG(
     dag_id = 'Config_Module',
     schedule_interval = None,
     start_date = datetime(2024,5,11),
     catchup = False,
-    tags = ['DataAlert']
+    tags = ['DataAlert'],
+    # render_template_as_native_obj = True
 ) as dag:
-    # scan_file = PythonOperator(
-    #     task_id = 'scan_file',
-    #     python_callable = scan_file
-    # )
+    
+    fm = File_management()
+    vd = Validation()
     
     scan_file = BranchPythonOperator(
         task_id = 'scan_file',
@@ -577,43 +526,42 @@ with DAG(
 
     download_file = PythonOperator(
         task_id = 'download_file',
-        python_callable = File_management.download_file
+        python_callable = fm.download_file
     )
 
     read_file = PythonOperator(
         task_id = 'read_file',
-        python_callable = File_management.read_file
+        python_callable = fm.read_file
     )
 
     backup_file = PythonOperator(
         task_id = 'backup_file',
-        python_callable = File_management.backup_file
+        python_callable = fm.backup_file
     )
 
     remove_file = PythonOperator(
         task_id = 'remove_file',
-        python_callable = File_management.remove_file
+        python_callable = fm.remove_file
     )
 
-    validation_field = PythonOperator(
-        task_id = 'validation_field',
-        python_callable = Validation.validation_field
+    validation_rls_field = PythonOperator(
+        task_id = 'validation_rls_field',
+        python_callable = vd.validation_rls_field
     )
 
-    validation_rule = PythonOperator(
-        task_id = 'validation_rule',
-        python_callable = Validation.validation_rule
+    validation_rule_field = PythonOperator(
+        task_id = 'validation_rule_field',
+        python_callable = vd.validation_rule_field
     )
-
-    # send_mail = PythonOperator(
-    #     task_id = 'send_mail',
-    #     python_callable = Notification.send_mail
-    # )
 
     end_task = DummyOperator(
         task_id = 'end_task'
     )
 
     scan_file >> [download_file, end_task]
-    download_file >> read_file >> validation_field >> [validation_rule, end_task]
-    validation_rule >> backup_file >> remove_file >> end_task
+    download_file >> read_file >> validation_rls_field >> [validation_rule_field, end_task]
+    validation_rule_field >> backup_file >> remove_file >> end_task
+    
+    # scan_file >> [read_file, end_task]
+    # read_file >> validation_rls_field >> [validation_rule_field, end_task]
+    # validation_rule_field >> backup_file >> remove_file >> end_task
