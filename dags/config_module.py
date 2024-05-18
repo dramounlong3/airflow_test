@@ -565,3 +565,51 @@ with DAG(
     # scan_file >> [read_file, end_task]
     # read_file >> validation_rls_field >> [validation_rule_field, end_task]
     # validation_rule_field >> backup_file >> remove_file >> end_task
+    
+    
+from airflow.providers.docker.operators.docker import DockerOperator
+from docker.types import Mount
+
+def python_task2(ti):
+    df_result = ti.xcom_pull(task_ids='docker_task', key='return_value')
+    print("type(df_result)", type(df_result))
+    print("df_result = ", df_result)
+
+with DAG(
+    dag_id = 'Docker_Operator',
+    schedule_interval = None,
+    start_date = datetime(2024,5,11),
+    catchup = False,
+    tags = ['docker test'],
+) as dag:
+    
+    python_task = PythonOperator(
+        task_id="python_task",
+        python_callable=lambda: print('Hi from python operator.')
+    )
+    
+    docker_task = DockerOperator(
+        task_id = 'docker_task',
+        image = 'philips09/myimage:1.0.47',
+        command = 'python3 /data/in/container/test.py',
+        api_version='auto',
+        auto_remove=True,
+        mount_tmp_dir= False,
+        docker_url='tcp://host.docker.internal:2375',
+        mounts=[
+            Mount(source='D:/kyle/code/docker/airflow/script', target='/data/in/container', type='bind')
+        ]
+    )
+    
+    python_task2 = PythonOperator(
+        task_id="python_task2",
+        python_callable=python_task2
+    )
+    
+    end_task1 = DummyOperator(
+        task_id = 'end_task1'
+    )
+
+    
+    
+    python_task >> docker_task >> end_task1
